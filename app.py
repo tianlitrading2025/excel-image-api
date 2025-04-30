@@ -12,7 +12,6 @@ from openpyxl import load_workbook
 
 app = Flask(__name__)
 
-# 对应的 XML 命名空间
 NS = {
     'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
     'a':   'http://schemas.openxmlformats.org/drawingml/2006/main',
@@ -27,11 +26,13 @@ def obtainJanValueColumnIdx(wb):
     jan_header_row = None
 
     for sheet in wb.worksheets:
-        for row_idx in range(1, min(20, sheet.max_row + 1)):  # 搜尋前20行
-            for col_idx in range(1, min(20, sheet.max_column + 1)):  # 搜尋前20列
+        for row_idx in range(1, min(20, sheet.max_row + 1)):
+            for col_idx in range(1, min(20, sheet.max_column + 1)):
                 cell_value = sheet.cell(row=row_idx, column=col_idx).value
                 if cell_value and isinstance(cell_value, str):
-                    if "JAN" in cell_value or "ＪＡＮ" in cell_value:
+                    normalized = cell_value.strip().replace(" ", "").upper()
+                    normalized = normalized.replace("Ｊ", "J").replace("Ａ", "A").replace("Ｎ", "N")
+                    if "JAN" in normalized:
                         jan_column = col_idx
                         jan_header_row = row_idx
                         break
@@ -65,12 +66,12 @@ def map_images_to_cells(xlsx_path, jan_column):
 
             drawing_path = 'xl/' + drawing_target.replace('../', '')
             if drawing_path not in all_files:
-                continue  # 防呆：有可能找不到這個 drawing path
+                continue
 
             drawing_xml = ET.fromstring(zf.read(drawing_path))
             drawing_rels = f'xl/drawings/_rels/{drawing_path.split("/")[-1]}.rels'
             if drawing_rels not in all_files:
-                continue  # 防呆：有可能找不到 rels 檔案
+                continue
 
             rels2_xml = ET.fromstring(zf.read(drawing_rels))
 
@@ -83,28 +84,28 @@ def map_images_to_cells(xlsx_path, jan_column):
             for anchor in drawing_xml.findall('.//xdr:twoCellAnchor', NS) + drawing_xml.findall('.//xdr:oneCellAnchor', NS):
                 frm = anchor.find('xdr:from', NS)
                 if frm is None:
-                    continue  # 防呆：找不到 from 就跳過
+                    continue
 
                 row_el = frm.find('xdr:row', NS)
                 col_el = frm.find('xdr:col', NS)
                 if row_el is None or col_el is None:
-                    continue  # 防呆：row 或 col 缺失
+                    continue
 
                 try:
                     row = int(row_el.text) + 1
                     col = int(col_el.text) + 1
                 except (ValueError, TypeError):
-                    continue  # 防呆：row/col值無法轉成整數
+                    continue
 
                 cell = get_column_letter(col) + str(row)
 
                 blip = anchor.find('.//a:blip', NS)
                 if blip is None:
-                    continue  # 防呆：沒有圖片資訊
+                    continue
 
                 rId = blip.attrib.get(f'{{{NS["r"]}}}embed')
                 if not rId:
-                    continue  # 防呆：沒有 embed 屬性
+                    continue
 
                 media_file = rid2media.get(rId)
                 jan = sheet.cell(row=row, column=jan_column).value
@@ -163,7 +164,6 @@ def proceed(filepath, output_dir, tmpdir):
                 "saved_as": new_filename
             })
 
-    # 去除重複的檔案
     janId = []
     filter_extracted_images = []
     for img in extracted_images:
@@ -171,7 +171,6 @@ def proceed(filepath, output_dir, tmpdir):
             janId.append(img['jan_value'])
             filter_extracted_images.append(img)
 
-    # 建立ZIP檔案
     zip_output = os.path.join(tmpdir, "extracted_images.zip")
     with zipfile.ZipFile(zip_output, 'w') as zipf:
         for img_info in filter_extracted_images:
@@ -189,25 +188,20 @@ def upload_excel():
     
     file = request.files['file']
     
-    # 使用臨時目錄
     with tempfile.TemporaryDirectory() as temp_dir:
-        # 建立臨時目錄和輸出目錄
         tmpdir = os.path.join(temp_dir, 'temp')
         output_dir = os.path.join(temp_dir, 'output')
         os.makedirs(tmpdir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
         
-        # 保存上傳的文件
         filepath = os.path.join(tmpdir, file.filename)
         file.save(filepath)
         
-        # 處理文件
         jan_column, jan_header_row, extracted_images, zip_output = proceed(filepath, output_dir, tmpdir)
         
         if not jan_column:
             return jsonify({"error": "Could not find JAN column in the Excel file"}), 400
         
-        # 回傳 ZIP 檔案（如果需要）
         if os.path.exists(zip_output):
             return send_file(
                 zip_output,
@@ -216,13 +210,13 @@ def upload_excel():
                 download_name='extracted_images.zip'
             )
         else:
-            # 如果只需要回傳 JSON 資訊
             return jsonify({
                 "status": "success",
                 "message": "Images extracted and renamed with JAN codes",
                 "jan_column_found": f"Column {openpyxl.utils.get_column_letter(jan_column)} (Header at row {jan_header_row})",
                 "extracted_images": extracted_images
             })
+
 @app.route('/upload_base64', methods=['POST'])
 def upload_excel_base64():
     if 'file' not in request.files:
